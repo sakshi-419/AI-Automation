@@ -5,8 +5,8 @@ from groq import Groq
 
 def plan_annotations(ocr_path: Path, transcript_path: Path, annotation_path: Path, client=None, model_name=None) -> None:
     """
-    Constructs a granular visual-audio event map, synchronizing text positions 
-    and handwritten math steps with word-level transcript timestamps.
+    Constructs a highly granular visual-audio event map, ensuring the final correct 
+    MCQ option is highlighted immediately after the last formula row resolves.
     """
     with ocr_path.open("r", encoding="utf-8") as f:
         ocr_data = json.load(f)
@@ -40,6 +40,10 @@ OCR BLOCK SPACE MANIFEST:
 
 GRANULAR AUDIO TIMELINE:
 {json.dumps(simple_transcript)}
+
+CRITICAL CONCLUDING RULE:
+You must explicitly generate a final "marker_highlight" annotation for Option (C). 
+Set its 'start_time' to trigger right after the final answer calculation 'd = 5 units' finishes rendering, and keep it active until the absolute end of the video ('end_time': {video_end_time}).
 
 Output ONLY a valid JSON object matching this schema layout precisely:
 {{
@@ -108,15 +112,15 @@ Output ONLY a valid JSON object matching this schema layout precisely:
     {{
       "type": "marker_highlight",
       "target_text": "(C) 5 units",
-      "target_coords": [10, 330, 155, 45],
-      "start_time": 49.0,
+      "target_coords": [15, 365, 160, 45],
+      "start_time": 48.6,
       "end_time": {video_end_time}
     }}
   ]
 }}
 """
 
-    print("Connecting to Groq Engine to synchronize visual audio progression matrices...")
+    print("Connecting to Groq Engine to synchronize final visual answer indicators...")
     groq_client = Groq()
     
     chat_completion = groq_client.chat.completions.create(
@@ -131,6 +135,32 @@ Output ONLY a valid JSON object matching this schema layout precisely:
     except Exception:
         structured_plan = ast.literal_eval(raw_text)
 
+    # Post-Generation Verification Guard: Double-check that a final answer highlight is strictly present
+    has_final_highlight = any(
+        a.get("type") == "marker_highlight" and "C" in str(a.get("target_text", ""))
+        for a in structured_plan.get("annotations", [])
+    )
+
+    if not has_final_highlight:
+        print("Guard Notice: Appending missing explicit trailing Option C highlight annotation block...")
+        # Fallback tracking injection pinpointed tightly over option C bounds from OCR map coordinates
+        option_c_highlight = {
+            "type": "marker_highlight",
+            "target_text": "(C) 5 units",
+            "target_coords": [15, 365, 160, 45],
+            "start_time": max(video_end_time - 5.0, 0.0),
+            "end_time": video_end_time
+        }
+        
+        # Pull exact completion timings from the last board calculation line if it exists
+        write_steps = [a for a in structured_plan.get("annotations", []) if a.get("type") == "board_write"]
+        if write_steps:
+            write_steps.sort(key=lambda s: s.get("start_time", 0.0))
+            last_math_step = write_steps[-1]
+            option_c_highlight["start_time"] = last_math_step.get("end_time", option_c_highlight["start_time"]) + 0.1
+
+        structured_plan.setdefault("annotations", []).append(option_c_highlight)
+
     with annotation_path.open("w", encoding="utf-8") as f:
         json.dump(structured_plan, f, indent=2, ensure_ascii=False)
-    print("Success: Time-synchronized annotation blueprint populated successfully.")
+    print("Success: Final time-synchronized annotation plan compiled with trailing Option C highlight.")
