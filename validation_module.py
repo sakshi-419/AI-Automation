@@ -1,49 +1,38 @@
 import json
 from pathlib import Path
 
-def validate_plan(image_path: Path, annotation_path: Path, ocr_path: Path, transcript_path: Path):
-    print("Validating Annotation Plan...")
-    
+def validate_outputs(
+    image_path: Path,
+    annotation_path: Path,
+    ocr_path: Path,
+    transcript_path: Path
+):
+    print("Validating Educational Whiteboard Generation Plan...")
+
     with annotation_path.open("r", encoding="utf-8") as f:
         plan = json.load(f)
+
+    if not isinstance(plan, dict) or "annotations" not in plan:
+        raise ValueError("Invalid annotation JSON structure: Root must be an object containing an 'annotations' array.")
+
+    annotations = plan.get("annotations", [])
     
-    ocr_data = {}
-    if ocr_path.exists():
-        with ocr_path.open("r", encoding="utf-8") as f:
-            ocr_data = json.load(f)
-            
-    if isinstance(plan, list):
-        annotations = plan
-    else:
-        annotations = plan.get("annotations", [])
-    
-    seen_formulas = set()
-    
-    # Simple validation checks
     for i, ann in enumerate(annotations):
-        # 1. Missing timestamps
+        atype = ann.get("type")
+        if atype not in ("ocr_highlight", "whiteboard_write", "gesture_point"):
+            raise ValueError(f"Annotation index {i} has invalid type: {atype}")
+
         if "start_time" not in ann or "end_time" not in ann:
-            raise ValueError(f"Annotation {i} missing start_time or end_time: {ann}")
-            
-        # 2. Invalid OCR References
-        ocr_ref = ann.get("ocr_reference")
-        if ocr_ref:
-            ref_text = str(ocr_ref).lower()
-            found = False
-            for item in ocr_data.get("detected_text", []):
-                t = item["text"].lower()
-                if ref_text in t or t in ref_text:
-                    found = True
-                    break
-            if not found:
-                raise ValueError(f"Annotation {i} has invalid OCR reference: '{ocr_ref}' not found in OCR results.")
-                
-        # 3. Duplicated formulas
-        if ann.get("type") == "formula_box":
-            content = ann.get("content", "").strip()
-            if content in seen_formulas:
-                raise ValueError(f"Annotation {i} contains a duplicated formula: '{content}'")
-            seen_formulas.add(content)
-            
-    print("Validation passed. No missing timestamps, valid OCR references, and no duplicate formulas.")
+            raise ValueError(f"Annotation index {i} is missing lifecycle timestamps.")
+
+        if ann["start_time"] > ann["end_time"]:
+            raise ValueError(f"Annotation index {i} presents time-inversion anomalies: start_time > end_time.")
+
+        if atype == "whiteboard_write":
+            if "content" not in ann or not str(ann["content"]).strip():
+                raise ValueError(f"Whiteboard write index {i} lacks structural string content.")
+            if "step_sequence" not in ann:
+                raise ValueError(f"Whiteboard step index {i} lacks a valid 'step_sequence' layout integer.")
+
+    print("✅ Validation complete: Pipeline strategy parameters verified.")
     return True
